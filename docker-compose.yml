@@ -3,13 +3,14 @@ volumes:
   postgres_storage:
   ollama_storage:
   qdrant_storage:
+  redis_storage:
 
 networks:
-  demo:
+  N8N-LAN:
 
 x-n8n: &service-n8n
-  image: n8nio/n8n:latest
-  networks: ['demo']
+  image: n8nio/n8n:1.108.2
+  networks: ['N8N-LAN']
   environment:
     - DB_TYPE=postgresdb
     - DB_POSTGRESDB_HOST=postgres
@@ -20,6 +21,9 @@ x-n8n: &service-n8n
     - N8N_ENCRYPTION_KEY
     - N8N_USER_MANAGEMENT_JWT_SECRET
     - OLLAMA_HOST=${OLLAMA_HOST:-ollama:11434}
+  # Redis settings for use as memory in flows
+    - REDIS_HOST=redis
+    - REDIS_PORT=6379
   env_file:
     - path: .env
       required: true
@@ -27,7 +31,7 @@ x-n8n: &service-n8n
 x-ollama: &service-ollama
   image: ollama/ollama:latest
   container_name: ollama
-  networks: ['demo']
+  networks: ['N8N-LAN']
   restart: unless-stopped
   ports:
     - 11434:11434
@@ -36,7 +40,7 @@ x-ollama: &service-ollama
 
 x-init-ollama: &init-ollama
   image: ollama/ollama:latest
-  networks: ['demo']
+  networks: ['N8N-LAN']
   container_name: ollama-pull-llama
   volumes:
     - ollama_storage:/root/.ollama
@@ -51,7 +55,7 @@ services:
   postgres:
     image: postgres:16-alpine
     hostname: postgres
-    networks: ['demo']
+    networks: ['N8N-LAN']
     restart: unless-stopped
     environment:
       - POSTGRES_USER
@@ -93,6 +97,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
       n8n-import:
         condition: service_completed_successfully
 
@@ -100,12 +106,29 @@ services:
     image: qdrant/qdrant
     hostname: qdrant
     container_name: qdrant
-    networks: ['demo']
+    networks: ['N8N-LAN']
     restart: unless-stopped
     ports:
       - 6333:6333
     volumes:
       - qdrant_storage:/qdrant/storage
+
+  redis:
+    image: redis:7-alpine
+    hostname: redis
+    container_name: redis
+    networks: ['N8N-LAN']
+    restart: unless-stopped
+    ports:
+      - 6379:6379
+    volumes:
+      - redis_storage:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   ollama-cpu:
     profiles: ["cpu"]
@@ -148,3 +171,23 @@ services:
     image: ollama/ollama:rocm
     depends_on:
      - ollama-gpu-amd
+
+  waha:
+    image: devlikeapro/waha:latest
+    container_name: waha
+    networks: ['N8N-LAN']
+    restart: unless-stopped
+    ports:
+      - "3000:3000"   # API HTTP
+      - "3001:3001"   # Painel Web (opcional)
+    environment:
+      - WAHA_LICENSE=free              # ou sua licença se tiver
+      - WAHA_PORT=3000
+      - WAHA_UI_PORT=3001
+      - TZ=America/Sao_Paulo
+      - WAHA_LOG_LEVEL=debug
+      - WAHA_PERSISTENCE=local
+      - WHATSAPP_API_KEY=half2500
+      - WHATSAPP_DEFAULT_ENGINE=whatsapp-web
+    volumes:
+      - ./waha_data:/app/data   # mantém sessões e QR Codes
